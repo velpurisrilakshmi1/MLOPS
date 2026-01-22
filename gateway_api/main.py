@@ -1,13 +1,10 @@
-import json
-import logging
-import time
-import sys
 import os
-from typing import Optional
+import sys
+import time
 
+import structlog
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import structlog
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -19,7 +16,7 @@ structlog.configure(
     processors=[
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.add_log_level,
-        structlog.processors.JSONRenderer()
+        structlog.processors.JSONRenderer(),
     ],
     context_class=dict,
     logger_factory=structlog.PrintLoggerFactory(),
@@ -37,8 +34,8 @@ total_latency = 0.0
 
 class GenerateRequest(BaseModel):
     prompt: str
-    max_tokens: Optional[int] = 100
-    temperature: Optional[float] = 0.7
+    max_tokens: int | None = 100
+    temperature: float | None = 0.7
 
 
 class GenerateResponse(BaseModel):
@@ -52,39 +49,37 @@ class GenerateResponse(BaseModel):
 async def generate(request: GenerateRequest):
     """Generate text from the LLM backend."""
     global request_count, total_latency
-    
+
     start_time = time.time()
     request_count += 1
-    
+
     logger.info(
         "generate_request",
         prompt_length=len(request.prompt),
         max_tokens=request.max_tokens,
-        temperature=request.temperature
+        temperature=request.temperature,
     )
-    
+
     try:
         result = worker.generate(
-            prompt=request.prompt,
-            max_tokens=request.max_tokens,
-            temperature=request.temperature
+            prompt=request.prompt, max_tokens=request.max_tokens, temperature=request.temperature
         )
-        
+
         latency = (time.time() - start_time) * 1000
         total_latency += latency
-        
+
         logger.info(
             "generate_success",
             latency_ms=latency,
             tokens_per_sec=result["tokens_per_sec"],
-            output_length=len(result["text"])
+            output_length=len(result["text"]),
         )
-        
+
         return GenerateResponse(
             text=result["text"],
             tokens_per_sec=result["tokens_per_sec"],
             latency_ms=result["latency_ms"],
-            model=result["model"]
+            model=result["model"],
         )
     except Exception as e:
         logger.error("generate_failed", error=str(e))
@@ -119,18 +114,19 @@ async def readyz():
 async def metrics():
     """Prometheus-style metrics endpoint."""
     avg_latency = total_latency / request_count if request_count > 0 else 0.0
-    
+
     metrics_data = {
         "request_count": request_count,
         "avg_latency_ms": round(avg_latency, 2),
         "total_latency_ms": round(total_latency, 2),
-        "worker_status": "ready" if worker.is_ready() else "not_ready"
+        "worker_status": "ready" if worker.is_ready() else "not_ready",
     }
-    
+
     logger.debug("metrics_request", **metrics_data)
     return metrics_data
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)

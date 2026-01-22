@@ -1,7 +1,8 @@
+import os
+import sys
+
 import pytest
 from fastapi.testclient import TestClient
-import sys
-import os
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -29,15 +30,11 @@ def test_readyz():
 
 def test_generate():
     """Test text generation endpoint."""
-    payload = {
-        "prompt": "Hello, how are you?",
-        "max_tokens": 50,
-        "temperature": 0.7
-    }
-    
+    payload = {"prompt": "Hello, how are you?", "max_tokens": 50, "temperature": 0.7}
+
     response = client.post("/generate", json=payload)
     assert response.status_code == 200
-    
+
     data = response.json()
     assert "text" in data
     assert "tokens_per_sec" in data
@@ -51,10 +48,8 @@ def test_generate():
 
 def test_generate_minimal():
     """Test generation with minimal parameters."""
-    payload = {
-        "prompt": "Test prompt"
-    }
-    
+    payload = {"prompt": "Test prompt"}
+
     response = client.post("/generate", json=payload)
     assert response.status_code == 200
     data = response.json()
@@ -65,10 +60,10 @@ def test_metrics():
     """Test metrics endpoint."""
     # Make a generate request first
     client.post("/generate", json={"prompt": "test"})
-    
+
     response = client.get("/metrics")
     assert response.status_code == 200
-    
+
     data = response.json()
     assert "request_count" in data
     assert "avg_latency_ms" in data
