@@ -36,6 +36,11 @@ ignore = [
     "E501",  # Line too long (handled by formatter)
     "B008",  # Do not perform function calls in argument defaults
     "C901",  # Function is too complex
+    "B904",  # Within except clause, use raise ... from err
+    "E722",  # Do not use bare except
+    "SIM102",  # Use single if statement instead of nested if
+    "SIM105",  # Use contextlib.suppress instead of try-except-pass
+    "SIM113",  # Use enumerate for index variable in for loop
 ]
 
 [lint.per-file-ignores]
