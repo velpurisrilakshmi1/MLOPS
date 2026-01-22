@@ -1,0 +1,23 @@
+{
+  "timestamp": "2026-01-21 18:57:24",
+  "base_url": "http://localhost:8000",
+  "total_requests": 20,
+  "successful_requests": 20,
+  "failed_requests": 0,
+  "concurrency": 1,
+  "total_duration_s": 1.0,
+  "throughput_rps": 19.98,
+  "error_rate": 0.0,
+  "latency_stats": {
+    "min_ms": 21.72,
+    "max_ms": 71.86,
+    "mean_ms": 49.91,
+    "median_ms": 52.41,
+    "p50_ms": 52.41,
+    "p95_ms": 71.86,
+    "p99_ms": 71.86,
+    "stdev_ms": 14.53
+  },
+  "avg_tokens_per_sec": 269.66,
+  "errors": []
+}

@@ -1,0 +1,29 @@
+FROM python:3.11-slim
+
+# Create non-root user
+RUN useradd -m -u 1000 appuser
+
+WORKDIR /app
+
+# Copy and install minimal dependencies for backend worker
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy backend code only
+COPY llm_backend/ ./llm_backend/
+
+# Change ownership to non-root user
+RUN chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+# Expose backend API port
+EXPOSE 8001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8001/healthz')"
+
+# Run the backend API
+CMD ["python", "-m", "uvicorn", "llm_backend.api:app", "--host", "0.0.0.0", "--port", "8001"]

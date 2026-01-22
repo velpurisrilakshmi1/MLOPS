@@ -1,0 +1,253 @@
+name: Main Branch CI/CD
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov ruff
+
+      - name: Run linter
+        run: |
+          ruff check .
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --cov=gateway_api --cov=llm_backend --cov-report=xml --cov-report=term
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          file: ./coverage.xml
+          flags: unittests
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  build-and-push:
+    name: Build and Push Docker Images
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image:
+          - name: gateway
+            dockerfile: Dockerfile.gateway
+          - name: backend
+            dockerfile: Dockerfile.backend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.image.name }}
+          tags: |
+            type=sha,prefix={{branch}}-
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./${{ matrix.image.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  benchmark:
+    name: Run Benchmarks
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install requests
+
+      - name: Build gateway image
+        run: |
+          docker build -f Dockerfile.gateway -t llm-gateway:latest .
+
+      - name: Start gateway container
+        run: |
+          docker run -d --name gateway -p 8000:8000 llm-gateway:latest
+          sleep 10
+
+      - name: Wait for service to be ready
+        run: |
+          timeout 30 bash -c 'until curl -f http://localhost:8000/healthz; do sleep 2; done'
+
+      - name: Run benchmark
+        run: |
+          python bench/run_bench.py --url http://localhost:8000 -n 100 -o bench/bench_results.json
+
+      - name: Display benchmark results
+        if: always()
+        run: |
+          if [ -f bench/bench_results.json ]; then
+            cat bench/bench_results.json | python -m json.tool
+          fi
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results-${{ github.sha }}
+          path: |
+            bench/bench_results.json
+            bench/baseline.json
+          retention-days: 90
+
+      - name: Check for baseline and compare
+        if: always()
+        run: |
+          if [ -f bench/baseline.json ]; then
+            echo "Comparing against baseline..."
+            python bench/compare.py --current bench/bench_results.json --baseline bench/baseline.json || true
+          else
+            echo "No baseline found, setting current run as baseline"
+            python bench/compare.py --set-baseline
+          fi
+
+      - name: Stop containers
+        if: always()
+        run: |
+          docker logs gateway || true
+          docker stop gateway || true
+          docker rm gateway || true
+
+  integration-test:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install requests
+
+      - name: Build images
+        run: |
+          docker build -f Dockerfile.gateway -t llm-gateway:test .
+          docker build -f Dockerfile.backend -t llm-backend:test .
+
+      - name: Start services
+        run: |
+          docker run -d --name backend -p 8001:8001 llm-backend:test
+          docker run -d --name gateway -p 8000:8000 \
+            -e BACKEND_URL=http://host.docker.internal:8001 \
+            llm-gateway:test
+          sleep 10
+
+      - name: Run integration tests
+        run: |
+          # Health checks
+          curl -f http://localhost:8000/healthz
+          curl -f http://localhost:8001/healthz
+          
+          # Test gateway endpoint
+          response=$(curl -X POST http://localhost:8000/generate \
+            -H "Content-Type: application/json" \
+            -d '{"prompt": "Test integration", "max_tokens": 100}' \
+            --fail-with-body)
+          
+          echo "$response"
+          echo "$response" | grep -q "text"
+
+      - name: Stop containers
+        if: always()
+        run: |
+          docker stop gateway backend || true
+          docker rm gateway backend || true
+
+  release-summary:
+    name: Release Summary
+    runs-on: ubuntu-latest
+    needs: [test, build-and-push, benchmark, integration-test]
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## 🚀 Main Branch Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tests**: ${{ needs.test.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build & Push**: ${{ needs.build-and-push.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Benchmark**: ${{ needs.benchmark.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Integration Test**: ${{ needs.integration-test.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Check results
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ] || \
+             [ "${{ needs.build-and-push.result }}" != "success" ]; then
+            echo "❌ Critical checks failed"
+            exit 1
+          else
+            echo "✅ All critical checks passed"
+          fi

@@ -1,0 +1,10 @@
+{"prompt": "Explain the concept of quantum computing in simple terms.", "max_tokens": 150}
+{"prompt": "What are the benefits of using Kubernetes for container orchestration?", "max_tokens": 200}
+{"prompt": "Write a Python function to calculate the Fibonacci sequence.", "max_tokens": 100}
+{"prompt": "Describe the differences between REST and GraphQL APIs.", "max_tokens": 180}
+{"prompt": "What is the purpose of Docker containers in modern software development?", "max_tokens": 150}
+{"prompt": "Explain machine learning model deployment best practices.", "max_tokens": 200}
+{"prompt": "How does horizontal pod autoscaling work in Kubernetes?", "max_tokens": 150}
+{"prompt": "What are the advantages of microservices architecture?", "max_tokens": 180}
+{"prompt": "Describe the CAP theorem in distributed systems.", "max_tokens": 150}
+{"prompt": "What is the difference between CI and CD in DevOps?", "max_tokens": 120}

@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-backend
+  labels:
+    app: backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+      - name: backend
+        image: llm-backend:dev
+        imagePullPolicy: Never  # Use local image for kind
+        ports:
+        - containerPort: 8001
+          name: http
+        env:
+        - name: PORT
+          valueFrom:
+            configMapKeyRef:
+              name: llm-config
+              key: BACKEND_PORT
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: llm-config
+              key: BACKEND_LOG_LEVEL
+        - name: WORKER_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: llm-config
+              key: WORKER_TIMEOUT
+        - name: MAX_WORKERS
+          valueFrom:
+            configMapKeyRef:
+              name: llm-config
+              key: MAX_WORKERS
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8001
+          initialDelaySeconds: 60
+          periodSeconds: 15
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3

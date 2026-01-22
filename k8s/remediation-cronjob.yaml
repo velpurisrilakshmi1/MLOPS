@@ -1,0 +1,266 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: watcher-config
+  labels:
+    app: auto-remediation
+data:
+  # Watcher configuration
+  CHECK_INTERVAL: "5m"
+  RESULTS_PATH: "/data/bench_results.json"
+  AUTO_EXECUTE: "false"  # Set to "true" to enable automatic remediation
+  DRY_RUN: "false"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: remediation-watcher
+  labels:
+    app: auto-remediation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: remediation-watcher
+  labels:
+    app: auto-remediation
+rules:
+  # Permissions for reading pods and deployments
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  
+  # Permissions for scaling
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["get", "patch", "update"]
+  
+  # Permissions for rollbacks
+  - apiGroups: ["apps"]
+    resources: ["deployments/rollback"]
+    verbs: ["create"]
+  
+  # Permissions for ConfigMaps
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "patch", "update"]
+  
+  # Permissions for reading logs
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: remediation-watcher
+  labels:
+    app: auto-remediation
+subjects:
+  - kind: ServiceAccount
+    name: remediation-watcher
+    namespace: default
+roleRef:
+  kind: Role
+  name: remediation-watcher
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: auto-remediation-watcher
+  labels:
+    app: auto-remediation
+spec:
+  # Run every 5 minutes
+  schedule: "*/5 * * * *"
+  
+  # Keep last 3 successful and 3 failed jobs
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  
+  # Don't start new job if previous is still running
+  concurrencyPolicy: Forbid
+  
+  jobTemplate:
+    metadata:
+      labels:
+        app: auto-remediation
+        job: watcher
+    spec:
+      # Allow 5 minutes for the job to complete
+      activeDeadlineSeconds: 300
+      
+      # Retry once on failure
+      backoffLimit: 1
+      
+      template:
+        metadata:
+          labels:
+            app: auto-remediation
+        spec:
+          serviceAccountName: remediation-watcher
+          restartPolicy: OnFailure
+          
+          # Use initContainer to fetch latest benchmark results
+          initContainers:
+            - name: fetch-results
+              image: busybox:latest
+              command:
+                - sh
+                - -c
+                - |
+                  echo "Fetching latest benchmark results..."
+                  # In production, this would fetch from a persistent volume or API
+                  # For now, create a dummy results file for testing
+                  cat > /data/bench_results.json << 'EOF'
+                  {
+                    "timestamp": "2026-01-21 12:00:00",
+                    "total_requests": 100,
+                    "successful_requests": 100,
+                    "failed_requests": 0,
+                    "error_rate": 0.0,
+                    "throughput_rps": 20.5,
+                    "latency_stats": {
+                      "p50_ms": 45.2,
+                      "p95_ms": 78.5,
+                      "p99_ms": 95.3,
+                      "mean_ms": 50.1
+                    }
+                  }
+                  EOF
+                  echo "Results file created"
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+          
+          containers:
+            - name: watcher
+              # In production, build custom image with watcher.py
+              # For now, use Python base image
+              image: python:3.11-slim
+              
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  echo "Installing dependencies..."
+                  pip install --quiet requests
+                  
+                  echo "Copying watcher script..."
+                  cat > /app/watcher.py << 'WATCHER_SCRIPT'
+                  $(cat ../remediation/watcher.py)
+                  WATCHER_SCRIPT
+                  
+                  echo "Running auto-remediation watcher..."
+                  python /app/watcher.py \
+                    --results /data/bench_results.json \
+                    --generate-script /data/remediation.sh \
+                    ${AUTO_EXECUTE:+--auto-execute} \
+                    ${DRY_RUN:+--dry-run}
+              
+              env:
+                - name: AUTO_EXECUTE
+                  valueFrom:
+                    configMapKeyRef:
+                      name: watcher-config
+                      key: AUTO_EXECUTE
+                - name: DRY_RUN
+                  valueFrom:
+                    configMapKeyRef:
+                      name: watcher-config
+                      key: DRY_RUN
+              
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+                - name: scripts
+                  mountPath: /app
+              
+              resources:
+                requests:
+                  memory: "128Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "256Mi"
+                  cpu: "200m"
+          
+          volumes:
+            - name: data
+              emptyDir: {}
+            - name: scripts
+              emptyDir: {}
+---
+# Alternative: Deployment with sidecar pattern (continuous monitoring)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: remediation-watcher-sidecar
+  labels:
+    app: auto-remediation
+    mode: continuous
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auto-remediation
+      mode: continuous
+  template:
+    metadata:
+      labels:
+        app: auto-remediation
+        mode: continuous
+    spec:
+      serviceAccountName: remediation-watcher
+      
+      containers:
+        - name: watcher
+          image: python:3.11-slim
+          
+          command:
+            - /bin/bash
+            - -c
+            - |
+              echo "Installing dependencies..."
+              pip install --quiet requests
+              
+              echo "Starting continuous monitoring..."
+              while true; do
+                echo "---"
+                echo "Running watcher at $(date)"
+                
+                # Run watcher if results file exists
+                if [ -f /data/bench_results.json ]; then
+                  python /app/watcher.py \
+                    --results /data/bench_results.json \
+                    --dry-run
+                else
+                  echo "No benchmark results found, skipping..."
+                fi
+                
+                # Wait 5 minutes
+                echo "Sleeping for 5 minutes..."
+                sleep 300
+              done
+          
+          volumeMounts:
+            - name: benchmark-data
+              mountPath: /data
+            - name: scripts
+              mountPath: /app
+          
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+      
+      volumes:
+        - name: benchmark-data
+          emptyDir: {}
+        - name: scripts
+          configMap:
+            name: watcher-scripts
+            defaultMode: 0755

@@ -1,0 +1,14 @@
+﻿{
+  "timestamp": "2026-01-21 19:00:00",
+  "total_requests": 100,
+  "successful_requests": 95,
+  "failed_requests": 5,
+  "error_rate": 0.05,
+  "throughput_rps": 12.5,
+  "latency_stats": {
+    "p50_ms": 95.0,
+    "p95_ms": 165.0,
+    "p99_ms": 210.0,
+    "mean_ms": 105.0
+  }
+}
